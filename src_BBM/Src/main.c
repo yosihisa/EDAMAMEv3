@@ -54,7 +54,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "C1098.h"
+#include "jpeg_SW.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -78,11 +79,21 @@ JPEG_HandleTypeDef hjpeg;
 
 SD_HandleTypeDef hsd1;
 
-UART_HandleTypeDef huart2;
+TIM_HandleTypeDef htim2;
+
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-
+// 標準出力をUART1へ
+#ifdef __GNUC__
+#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+#define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+#endif /* __GNUC__ */
+void __io_putchar(uint8_t ch) {
+	HAL_UART_Transmit(&huart3, &ch, 1, 1);
+}
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,8 +101,9 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_SDMMC1_SD_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_JPEG_Init(void);
+static void MX_UART4_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -138,10 +150,63 @@ int main(void)
 	MX_USART3_UART_Init();
 	MX_SDMMC1_SD_Init();
 	MX_FATFS_Init();
-	MX_USART2_UART_Init();
 	MX_JPEG_Init();
+	MX_UART4_Init();
+	MX_TIM2_Init();
 	/* USER CODE BEGIN 2 */
 
+	HAL_TIM_Base_Start_IT(&htim2);
+
+	//SDカード
+	/*
+	printf("Hello SD test.\n");
+	FRESULT res_fs;
+	FATFS fs;
+	FIL testFile;
+	DIR dir;
+	char buf[128];
+	int ret;
+	const int MAX_DIR = 100;
+	unsigned int testBytes;
+
+	uint32_t data_size;
+	uint8_t path[13] = "test.txt";
+
+	do {
+		res_fs = f_mount(&fs, "", 1);
+		if (res_fs != FR_OK) {
+			printf("f_mount() : error %u\n", res_fs);
+		}
+
+		res_fs = f_opendir(&dir, "");
+		if (res_fs != FR_OK) {
+			printf("f_opendir() : error %u\n", res_fs);
+		}
+		HAL_Delay(800);
+	} while (res_fs != FR_OK);
+
+	res_fs = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
+	printf("f_open:%d \r\n",res_fs);
+
+	uint8_t testBuffer[16] = "SD write success";
+	res_fs = f_write(&testFile, testBuffer, 16, &testBytes);
+	printf("f_write:%d \r\n",res_fs);
+
+	res_fs = f_close(&testFile);
+	printf("f_close:%d \r\n",res_fs);
+	 */
+
+	//カメラ初期化
+	printf("Hello C1098 test.\n");
+	CAMERARESULT camrea_res = camera_inital_HiSpeed(&huart4, VGA, 460800);
+	printf("camera_Init %d\n", camrea_res);
+
+	JDEC jdec;
+	JRESULT jpeg_res;
+	IODEV jpeg;
+	uint32_t data_size;
+
+	uint32_t time,loop_t;
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -151,10 +216,70 @@ int main(void)
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
-		HAL_GPIO_TogglePin(LD1_GPIO_Port,LD1_Pin);
-		HAL_GPIO_TogglePin(LD2_GPIO_Port,LD2_Pin);
-		HAL_GPIO_TogglePin(LD3_GPIO_Port,LD3_Pin);
-		HAL_Delay(500);
+
+		HAL_GPIO_WritePin(LD1_GPIO_Port,LD1_Pin,GPIO_PIN_SET);
+		HAL_GPIO_WritePin(LD2_GPIO_Port,LD2_Pin,GPIO_PIN_SET);
+		HAL_GPIO_WritePin(LD3_GPIO_Port,LD3_Pin,GPIO_PIN_SET);
+		loop_t = 0;
+		//撮影
+		TIM2->CNT = 0;
+		while(snap_shot(&huart4) != CAMERA_OK);
+		time = TIM2->CNT;
+		loop_t += time;
+		printf("\n[%6.1fms] snap_shot\n", 0.1*time);
+
+		//写真を転送
+		TIM2->CNT = 0;
+		camrea_res = get_picture(&huart4, &jpeg.jpeg_data, MAX_SIZE, &data_size);
+		time = TIM2->CNT;
+		loop_t += time;
+		printf("[%6.1fms] get_picture   : %d %5.3fkB \n", 0.1*time,camrea_res,0.001*data_size);
+
+		if(data_size % 100 != 0){
+			//JPEGデコード
+			TIM2->CNT = 0;
+			uint8_t work[3100];
+			jpeg.jpeg_data_seek = 0;
+			jpeg_res = jd_prepare(&jdec, in_func, work, 3100, &jpeg);
+			memset(jpeg.RED_bool, 0, sizeof(jpeg.RED_bool));
+			time = TIM2->CNT;
+			loop_t += time;
+			printf("[%6.1fms] jd_prepare    : %d\n", 0.1*time,jpeg_res);
+
+
+			if (jpeg_res == JDR_OK) {
+				//デコード開始
+				TIM2->CNT = 0;
+				jpeg_res = jd_decomp(&jdec, out_func, 0);
+				time = TIM2->CNT;
+				loop_t += time;
+				printf("[%6.1fms] jd_decomp     : %d\n", 0.1*time,jpeg_res);
+				if (jpeg_res == JDR_OK) {
+
+					//重心計算
+					TIM2->CNT = 0;
+					uint16_t xc = 0, yc = 0, s = 0;
+					for (UINT h = 0; h < jdec.height; h++) {
+						for (UINT w = 0; w < jdec.width; w++) {
+							if ((jpeg.RED_bool[h][w / 8] & (0b10000000 >> (w % 8))) != 0) {
+								xc += w;
+								yc += h;
+								s++;
+							}
+						}
+					}
+					time = TIM2->CNT;
+					loop_t += time;
+					printf("[%6.1fms] centroid calc : %d x=%3d y=%3d s=%4d\n", 0.1*time,jpeg_res,xc/s,yc/s,s);
+				}
+			}
+		}
+		printf("--------------------------\n");
+		printf("[%6.1fms] Total\n", 0.1*loop_t);
+		HAL_GPIO_WritePin(LD1_GPIO_Port,LD1_Pin,GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(LD2_GPIO_Port,LD2_Pin,GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(LD3_GPIO_Port,LD3_Pin,GPIO_PIN_RESET);
+		while(TIM2->CNT + loop_t <20000);
 	}
 	/* USER CODE END 3 */
 }
@@ -202,23 +327,23 @@ void SystemClock_Config(void)
 			|RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
 	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
 	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV16;
 	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
 	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_7) != HAL_OK)
 	{
 		Error_Handler();
 	}
-	PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_USART3
+	PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART3|RCC_PERIPHCLK_UART4
 			|RCC_PERIPHCLK_SDMMC1|RCC_PERIPHCLK_CLK48;
 	PeriphClkInitStruct.PLLSAI.PLLSAIN = 96;
 	PeriphClkInitStruct.PLLSAI.PLLSAIR = 2;
 	PeriphClkInitStruct.PLLSAI.PLLSAIQ = 2;
-	PeriphClkInitStruct.PLLSAI.PLLSAIP = RCC_PLLSAIP_DIV4;
+	PeriphClkInitStruct.PLLSAI.PLLSAIP = RCC_PLLSAIP_DIV8;
 	PeriphClkInitStruct.PLLSAIDivQ = 1;
 	PeriphClkInitStruct.PLLSAIDivR = RCC_PLLSAIDIVR_2;
-	PeriphClkInitStruct.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
-	PeriphClkInitStruct.Usart3ClockSelection = RCC_USART3CLKSOURCE_PCLK1;
+	PeriphClkInitStruct.Usart3ClockSelection = RCC_USART3CLKSOURCE_SYSCLK;
+	PeriphClkInitStruct.Uart4ClockSelection = RCC_UART4CLKSOURCE_SYSCLK;
 	PeriphClkInitStruct.Clk48ClockSelection = RCC_CLK48SOURCE_PLLSAIP;
 	PeriphClkInitStruct.Sdmmc1ClockSelection = RCC_SDMMC1CLKSOURCE_CLK48;
 	if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
@@ -274,7 +399,7 @@ static void MX_SDMMC1_SD_Init(void)
 	hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
 	hsd1.Init.BusWide = SDMMC_BUS_WIDE_1B;
 	hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
-	hsd1.Init.ClockDiv = 10;
+	hsd1.Init.ClockDiv = 100;
 	/* USER CODE BEGIN SDMMC1_Init 2 */
 
 	/* USER CODE END SDMMC1_Init 2 */
@@ -282,37 +407,82 @@ static void MX_SDMMC1_SD_Init(void)
 }
 
 /**
- * @brief USART2 Initialization Function
+ * @brief TIM2 Initialization Function
  * @param None
  * @retval None
  */
-static void MX_USART2_UART_Init(void)
+static void MX_TIM2_Init(void)
 {
 
-	/* USER CODE BEGIN USART2_Init 0 */
+	/* USER CODE BEGIN TIM2_Init 0 */
 
-	/* USER CODE END USART2_Init 0 */
+	/* USER CODE END TIM2_Init 0 */
 
-	/* USER CODE BEGIN USART2_Init 1 */
+	TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+	TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-	/* USER CODE END USART2_Init 1 */
-	huart2.Instance = USART2;
-	huart2.Init.BaudRate = 115200;
-	huart2.Init.WordLength = UART_WORDLENGTH_8B;
-	huart2.Init.StopBits = UART_STOPBITS_1;
-	huart2.Init.Parity = UART_PARITY_NONE;
-	huart2.Init.Mode = UART_MODE_TX_RX;
-	huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-	huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-	huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-	huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-	if (HAL_UART_Init(&huart2) != HAL_OK)
+	/* USER CODE BEGIN TIM2_Init 1 */
+
+	/* USER CODE END TIM2_Init 1 */
+	htim2.Instance = TIM2;
+	htim2.Init.Prescaler = 2700;
+	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+	htim2.Init.Period = 0xFFFFFFFF;
+	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+	if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
 	{
 		Error_Handler();
 	}
-	/* USER CODE BEGIN USART2_Init 2 */
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	/* USER CODE BEGIN TIM2_Init 2 */
 
-	/* USER CODE END USART2_Init 2 */
+	/* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
+ * @brief UART4 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_UART4_Init(void)
+{
+
+	/* USER CODE BEGIN UART4_Init 0 */
+
+	/* USER CODE END UART4_Init 0 */
+
+	/* USER CODE BEGIN UART4_Init 1 */
+
+	/* USER CODE END UART4_Init 1 */
+	huart4.Instance = UART4;
+	huart4.Init.BaudRate = 115200;
+	huart4.Init.WordLength = UART_WORDLENGTH_8B;
+	huart4.Init.StopBits = UART_STOPBITS_1;
+	huart4.Init.Parity = UART_PARITY_NONE;
+	huart4.Init.Mode = UART_MODE_TX_RX;
+	huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+	huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+	huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+	huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+	if (HAL_UART_Init(&huart4) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	/* USER CODE BEGIN UART4_Init 2 */
+
+	/* USER CODE END UART4_Init 2 */
 
 }
 
@@ -451,6 +621,14 @@ static void MX_GPIO_Init(void)
 	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(USB_VBUS_GPIO_Port, &GPIO_InitStruct);
+
+	/*Configure GPIO pins : PD5 PD6 */
+	GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6;
+	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+	GPIO_InitStruct.Pull = GPIO_PULLUP;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+	GPIO_InitStruct.Alternate = GPIO_AF7_USART2;
+	HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
 	/*Configure GPIO pins : RMII_TX_EN_Pin RMII_TXD0_Pin */
 	GPIO_InitStruct.Pin = RMII_TX_EN_Pin|RMII_TXD0_Pin;
