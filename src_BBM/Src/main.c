@@ -198,7 +198,17 @@ int main(void)
 
 	//カメラ初期化
 	printf("Hello C1098 test.\n");
-	CAMERARESULT camrea_res = camera_inital_HiSpeed(&huart4, VGA, 460800);
+
+	CAMERARESULT camrea_res;
+	c1098_handle camera;
+
+	camera.uart_port = &huart4;
+	camera.packet_size = 256;
+	camera.baudrate = 460800;
+	camera.resolution = VGA;
+
+	camrea_res = camera_init(&camera);
+
 	printf("camera_Init %d\n", camrea_res);
 
 	JDEC jdec;
@@ -223,55 +233,53 @@ int main(void)
 		loop_t = 0;
 		//撮影
 		TIM2->CNT = 0;
-		while(snap_shot(&huart4) != CAMERA_OK);
+		while(snap_shot(&camera) != CAMERA_OK);
 		time = TIM2->CNT;
 		loop_t += time;
 		printf("\n[%6.1fms] snap_shot\n", 0.1*time);
 
 		//写真を転送
 		TIM2->CNT = 0;
-		camrea_res = get_picture(&huart4, &jpeg.jpeg_data, MAX_SIZE, &data_size);
+		camrea_res = get_picture(&camera, &jpeg.jpeg_data, MAX_SIZE, &data_size);
 		time = TIM2->CNT;
 		loop_t += time;
 		printf("[%6.1fms] get_picture   : %d %5.3fkB \n", 0.1*time,camrea_res,0.001*data_size);
 
-		if(data_size % 100 != 0){
-			//JPEGデコード
+		//JPEGデコード
+		TIM2->CNT = 0;
+		uint8_t work[3100];
+		jpeg.jpeg_data_seek = 0;
+		jpeg_res = jd_prepare(&jdec, in_func, work, 3100, &jpeg);
+		memset(jpeg.RED_bool, 0, sizeof(jpeg.RED_bool));
+		time = TIM2->CNT;
+		loop_t += time;
+		printf("[%6.1fms] jd_prepare    : %d\n", 0.1*time,jpeg_res);
+
+
+		if (jpeg_res == JDR_OK) {
+			//デコード開始
 			TIM2->CNT = 0;
-			uint8_t work[3100];
-			jpeg.jpeg_data_seek = 0;
-			jpeg_res = jd_prepare(&jdec, in_func, work, 3100, &jpeg);
-			memset(jpeg.RED_bool, 0, sizeof(jpeg.RED_bool));
+			jpeg_res = jd_decomp(&jdec, out_func, 0);
 			time = TIM2->CNT;
 			loop_t += time;
-			printf("[%6.1fms] jd_prepare    : %d\n", 0.1*time,jpeg_res);
-
-
+			printf("[%6.1fms] jd_decomp     : %d\n", 0.1*time,jpeg_res);
 			if (jpeg_res == JDR_OK) {
-				//デコード開始
-				TIM2->CNT = 0;
-				jpeg_res = jd_decomp(&jdec, out_func, 0);
-				time = TIM2->CNT;
-				loop_t += time;
-				printf("[%6.1fms] jd_decomp     : %d\n", 0.1*time,jpeg_res);
-				if (jpeg_res == JDR_OK) {
 
-					//重心計算
-					TIM2->CNT = 0;
-					uint16_t xc = 0, yc = 0, s = 0;
-					for (UINT h = 0; h < jdec.height; h++) {
-						for (UINT w = 0; w < jdec.width; w++) {
-							if ((jpeg.RED_bool[h][w / 8] & (0b10000000 >> (w % 8))) != 0) {
-								xc += w;
-								yc += h;
-								s++;
-							}
+				//重心計算
+				TIM2->CNT = 0;
+				uint16_t xc = 0, yc = 0, s = 0;
+				for (UINT h = 0; h < jdec.height; h++) {
+					for (UINT w = 0; w < jdec.width; w++) {
+						if ((jpeg.RED_bool[h][w / 8] & (0b10000000 >> (w % 8))) != 0) {
+							xc += w;
+							yc += h;
+							s++;
 						}
 					}
-					time = TIM2->CNT;
-					loop_t += time;
-					printf("[%6.1fms] centroid calc : %d x=%3d y=%3d s=%4d\n", 0.1*time,jpeg_res,xc/s,yc/s,s);
 				}
+				time = TIM2->CNT;
+				loop_t += time;
+				printf("[%6.1fms] centroid calc : %d x=%3d y=%3d s=%4d\n", 0.1*time,jpeg_res,xc/s,yc/s,s);
 			}
 		}
 		printf("--------------------------\n");
@@ -279,6 +287,7 @@ int main(void)
 		HAL_GPIO_WritePin(LD1_GPIO_Port,LD1_Pin,GPIO_PIN_RESET);
 		HAL_GPIO_WritePin(LD2_GPIO_Port,LD2_Pin,GPIO_PIN_RESET);
 		HAL_GPIO_WritePin(LD3_GPIO_Port,LD3_Pin,GPIO_PIN_RESET);
+
 		while(TIM2->CNT + loop_t <20000);
 	}
 	/* USER CODE END 3 */
