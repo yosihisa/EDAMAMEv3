@@ -34,5 +34,5 @@ typedef struct {
 #define max(a,b) (((a) > (b)) ? (a) : (b))
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
-uint32_t in_func(JDEC* jd, uint8_t* buff, uint32_t nbyte);
-uint32_t out_func(JDEC* jd, void* bitmap, JRECT* rect);
+UINT in_func(JDEC* jd, uint8_t* buff, uint32_t nbyte);
+UINT out_func(JDEC* jd, void* bitmap, JRECT* rect);

@@ -1,7 +1,7 @@
 #include "jpeg_SW.h"
 
 //JPEGデコーダ入力関数
-uint32_t in_func(JDEC* jd, uint8_t* buff, uint32_t nbyte){
+UINT in_func(JDEC* jd, uint8_t* buff, uint32_t nbyte){
 	IODEV *dev = (IODEV*)jd->device;   
 	if (buff) {
 		uint32_t e;
@@ -31,7 +31,7 @@ uint32_t in_func(JDEC* jd, uint8_t* buff, uint32_t nbyte){
 
 
 //JPEGデコーダ出力関数
-uint32_t out_func(JDEC* jd, void* bitmap, JRECT* rect)
+UINT out_func(JDEC* jd, void* bitmap, JRECT* rect)
 {
     IODEV *dev = (IODEV*)jd->device;       
 	uint8_t *src;
